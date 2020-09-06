@@ -11,7 +11,7 @@ use bytecodec::{Encode, Decode, io::{ReadBuf, IoDecodeExt, IoEncodeExt}};
 use amf::amf0;
 use keyframes::Keyframes;
 use patch::Patch;
-use std::io::Cursor;
+use std::io::{SeekFrom, Cursor};
 use anyhow::Result;
 
 #[derive(StructOpt)]
@@ -128,23 +128,39 @@ async fn generate_patch(file: File) -> Result<Option<Patch>> {
     }).await.unwrap()
 }
 
-async fn generate_keyframes(path: PathBuf, patch_path: PathBuf) -> Result<File> {
+async fn generate_keyframes(path: PathBuf, patch_path: PathBuf) -> Result<Option<File>> {
     let file = File::open(path.clone()).await?;
     let patch = generate_patch(file).await?;
     if let Some(patch) = patch {
         let patch = bincode::serialize(&patch)?;
         let mut patch_file = File::open(patch_path).await?;
         patch_file.write_all(&patch).await?;
+        patch_file.seek(SeekFrom::Start(0)).await?;
+        return Ok(Some(patch_file))
     }
-    unimplemented!()
+    return Ok(None)
 }
 
-async fn reply_with_patch(path: PathBuf, patch_file: File) -> Result<warp::hyper::Response<warp::hyper::Body>> {
-    unimplemented!();
-    // Ok(warp::http::Response::builder()
-    //     .body(
-    //         warp::hyper::Body::wrap_stream(patch_file)
-    //     )?)
+async fn reply_with_patch(path: PathBuf, patch_file: Option<File>) -> Result<warp::hyper::Response<warp::hyper::Body>> {
+    let patch: Patch = match patch_file {
+        Some(mut patch_file) => {
+            let mut buf = vec![];
+            patch_file.read_to_end(&mut buf).await?;
+            bincode::deserialize(&buf[..])?
+        },
+        None => Patch {
+            origin_pos: 0,
+            origin_size: 0,
+            patched: vec![],
+        }
+    };
+
+    let file = File::open(path).await?;
+    let stream = patch.patch_reader(file);
+    Ok(warp::http::Response::builder()
+        .body(
+            warp::hyper::Body::wrap_stream(stream)
+        )?)
 }
 
 async fn handle_get(args: Arc<Args>, path: FullPath) -> Result<impl warp::Reply, warp::Rejection>  {
@@ -153,10 +169,13 @@ async fn handle_get(args: Arc<Args>, path: FullPath) -> Result<impl warp::Reply,
     let path = root_path.join(PathBuf::from(p));
     let patch_path = path.join(".v0.binpatch");
     let patch = File::open(&patch_path).await;
+
     let patch_file = match patch {
-        Ok(pf) => pf,
+        Ok(pf) => Some(pf),
         Err(_) => generate_keyframes(path.clone(), patch_path).await.map_err(map_not_fount)?,
     };
+
+
     let reply = reply_with_patch(path, patch_file).await.map_err(map_not_fount)?;
     Ok(reply)
 }

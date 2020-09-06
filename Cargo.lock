@@ -217,6 +217,7 @@ dependencies = [
  "anyhow",
  "bincode",
  "bytecodec",
+ "bytes",
  "flv_codec",
  "futures",
  "paw",
