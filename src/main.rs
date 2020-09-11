@@ -179,7 +179,6 @@ async fn reply_with_patch(path: PathBuf, patch_file: Option<File>, range: Option
     let file = File::open(path).await?;
     let mut reader = patch.patch_reader(file).await?;
     let max_len = reader.len();
-    dbg!(&range);
     let range = if let Some(range) = range {
         range.iter()
             .map(|(start, end)| {
@@ -204,7 +203,6 @@ async fn reply_with_patch(path: PathBuf, patch_file: Option<File>, range: Option
     } else {
         io::Result::Ok((0, max_len))
     }?;
-    dbg!(range);
     reader.seek(SeekFrom::Start(range.0)).await?;
     let reader = reader.take(range.1 - range.0);
     let stream = reader_stream(reader);
