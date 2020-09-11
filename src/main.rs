@@ -13,6 +13,7 @@ use keyframes::Keyframes;
 use patch::{reader_stream, Patch};
 use std::io::{SeekFrom, Cursor};
 use anyhow::Result;
+use bytes::BufMut;
 
 #[derive(StructOpt)]
 struct Args {
@@ -58,7 +59,7 @@ fn insert_keyframes(metadata: amf0::Value, keyframes: Keyframes) -> amf0::Value 
 
 fn make_patched(metadata: amf0::Value) -> Vec<u8> {
     let mut buf = Cursor::new(Vec::<u8>::new());
-    amf0::string("onMetadata").write_to(&mut buf).unwrap();
+    amf0::string("onMetaData").write_to(&mut buf).unwrap();
     metadata.write_to(&mut buf).unwrap();
     let mut encoder = TagEncoder::<Vec<u8>>::new();
     let mut out: Vec<u8> = Vec::new();
@@ -68,6 +69,11 @@ fn make_patched(metadata: amf0::Value) -> Vec<u8> {
         data: buf.into_inner(),
     })).unwrap();
     encoder.encode_all(&mut out).unwrap();
+    let prev_size = out.len();
+    let mut tail = Vec::new();
+    tail.put_u32(prev_size as u32);
+    
+    out.append(&mut tail);
     out
 }
 
@@ -104,7 +110,7 @@ async fn generate_patch(file: File) -> Result<Option<Patch>> {
                             _ => return Err(anyhow::anyhow!("InvalidData")),
                         };
                         metadata_offset = offset;
-                        metadata_size = tag.tag_size() as u64;
+                        metadata_size = tag.tag_size() as u64 + 4;
                         let has_keyframes = has_keyframes(data.clone());
                         if has_keyframes {
                             return Ok(None)
@@ -118,11 +124,23 @@ async fn generate_patch(file: File) -> Result<Option<Patch>> {
         }
         Result::Ok(metadata
             .map(|m| {
-                let new_metadata = insert_keyframes(m, keyframes);
+                let patched_len = make_patched(
+                    insert_keyframes(
+                        m.clone(),
+                        keyframes.clone()
+                    )
+                ).len() as i64;
+                keyframes.offset = (patched_len - metadata_size as i64) as f64;
+                let patched = make_patched(
+                    insert_keyframes(
+                        m,
+                        keyframes
+                    )
+                );
                 Patch {
                     origin_pos: metadata_offset,
                     origin_size: metadata_size,
-                    patched: make_patched(new_metadata),
+                    patched,
                 }
             })
         )
@@ -134,10 +152,9 @@ async fn generate_keyframes(path: PathBuf, patch_path: PathBuf) -> Result<Option
     let patch = generate_patch(file).await?;
     if let Some(patch) = patch {
         let patch = bincode::serialize(&patch)?;
-        let mut patch_file = File::create(patch_path).await?;
+        let mut patch_file = File::create(patch_path.clone()).await?;
         patch_file.write_all(&patch).await?;
-        patch_file.seek(SeekFrom::Start(0)).await?;
-        return Ok(Some(patch_file))
+        return Ok(Some(File::open(patch_path).await?))
     }
     return Ok(None)
 }
@@ -187,11 +204,14 @@ async fn handle_get(args: Arc<Args>, path: FullPath) -> Result<impl warp::Reply,
 #[paw::main]
 #[tokio::main]
 async fn main(args: Args) {
+    let cors = warp::cors()
+        .allow_any_origin();
     let args = Arc::new(args);
     let routes = warp::get()
         .and(with_args(args))
         .and(warp::path::full())
-        .and_then(handle_get);
+        .and_then(handle_get)
+        .with(cors);
     warp::serve(routes)
         .run(([0, 0, 0, 0], 3040))
         .await;
