@@ -221,6 +221,8 @@ async fn handle_get(args: Arc<Args>, path: FullPath, headers: HeaderMap) -> Resu
     let p = decode(&path.as_str()[1..]).map_err(map_not_fount)?;
     let path = root_path.join(PathBuf::from(p));
     let mut patch_path = path.clone();
+    let filename = patch_path.file_name().unwrap_or_default().to_os_string();
+    patch_path.set_file_name(format!(".{}", filename.to_string_lossy()));
     patch_path.set_extension("v0.binpatch");
     let patch = File::open(&patch_path).await;
 
