@@ -220,6 +220,7 @@ dependencies = [
  "bytes",
  "flv_codec",
  "futures",
+ "headers",
  "paw",
  "serde",
  "structopt",

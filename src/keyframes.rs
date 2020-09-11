@@ -25,7 +25,11 @@ impl Keyframes {
                 Pair {
                     key: "filepositions".to_string(),
                     value: amf0::array(
-                        self.filepositions.into_iter().map(amf0::number).collect()
+                        self.filepositions
+                            .into_iter()
+                            .map(|i| i + offset)
+                            .map(amf0::number)
+                            .collect()
                     )
                 },
                 Pair {
@@ -33,7 +37,6 @@ impl Keyframes {
                     value: amf0::array(
                         self.times
                             .into_iter()
-                            .map(|i| i + offset)
                             .map(amf0::number)
                             .collect()
                     )

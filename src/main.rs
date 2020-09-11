@@ -3,7 +3,7 @@ mod keyframes;
 
 use structopt::StructOpt;
 use warp::{path::FullPath, Filter};
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc, io::SeekFrom};
 use tokio::{fs::File, task, prelude::*};
 use urlencoding::decode;
 use flv_codec::{FileDecoder, Tag, ScriptDataTag, VideoTag, FrameType, TagEncoder, Timestamp, StreamId};
@@ -11,9 +11,10 @@ use bytecodec::{Encode, Decode, io::{ReadBuf, IoDecodeExt, IoEncodeExt}};
 use amf::amf0;
 use keyframes::Keyframes;
 use patch::{reader_stream, Patch};
-use std::io::{SeekFrom, Cursor};
+use std::io::Cursor;
 use anyhow::Result;
 use bytes::BufMut;
+use headers::{Range, HeaderMap, HeaderMapExt};
 
 #[derive(StructOpt)]
 struct Args {
@@ -159,7 +160,9 @@ async fn generate_keyframes(path: PathBuf, patch_path: PathBuf) -> Result<Option
     return Ok(None)
 }
 
-async fn reply_with_patch(path: PathBuf, patch_file: Option<File>) -> Result<warp::hyper::Response<warp::hyper::Body>> {
+async fn reply_with_patch(path: PathBuf, patch_file: Option<File>, range: Option<Range>) -> Result<warp::hyper::Response<warp::hyper::Body>> {
+    use std::ops::Bound;
+
     let patch: Patch = match patch_file {
         Some(mut patch_file) => {
             let mut buf = vec![];
@@ -174,17 +177,48 @@ async fn reply_with_patch(path: PathBuf, patch_file: Option<File>) -> Result<war
     };
 
     let file = File::open(path).await?;
-    let reader = patch.patch_reader(file).await?;
-    let content_length = reader.len();
+    let mut reader = patch.patch_reader(file).await?;
+    let max_len = reader.len();
+    dbg!(&range);
+    let range = if let Some(range) = range {
+        range.iter()
+            .map(|(start, end)| {
+                let start = match start {
+                    Bound::Unbounded => 0,
+                    Bound::Included(s) => s,
+                    Bound::Excluded(s) => s + 1,
+                };
+                let end = match end {
+                    Bound::Unbounded => max_len,
+                    Bound::Included(s) => s,
+                    Bound::Excluded(s) => s + 1,
+                };
+                if start < end && end <= max_len {
+                    io::Result::Ok((start, end))
+                } else {
+                    Err(io::ErrorKind::InvalidData.into())
+                }
+            })
+            .next()
+            .unwrap_or(Ok((0, max_len)))
+    } else {
+        io::Result::Ok((0, max_len))
+    }?;
+    dbg!(range);
+    reader.seek(SeekFrom::Start(range.0)).await?;
+    let reader = reader.take(range.1 - range.0);
     let stream = reader_stream(reader);
-    Ok(warp::http::Response::builder()
-        .header("Content-Length", content_length)
-        .body(
-            warp::hyper::Body::wrap_stream(stream)
-        )?)
+    let mut builder = warp::http::Response::builder();
+    builder = builder.header("Content-Length", range.1 - range.0);
+    builder = builder.header("Content-Range", format!("bytes {}-{}/{}", range.0, range.1, max_len));
+
+    Ok(builder.body(
+        warp::hyper::Body::wrap_stream(stream)
+    )?)
 }
 
-async fn handle_get(args: Arc<Args>, path: FullPath) -> Result<impl warp::Reply, warp::Rejection>  {
+async fn handle_get(args: Arc<Args>, path: FullPath, headers: HeaderMap) -> Result<impl warp::Reply, warp::Rejection>  {
+    let range: Option<Range> = headers.typed_get();
     let root_path = args.root_path.clone().unwrap_or_default();
     let p = decode(&path.as_str()[1..]).map_err(map_not_fount)?;
     let path = root_path.join(PathBuf::from(p));
@@ -197,7 +231,9 @@ async fn handle_get(args: Arc<Args>, path: FullPath) -> Result<impl warp::Reply,
         Err(_) => generate_keyframes(path.clone(), patch_path).await.map_err(map_not_fount)?,
     };
 
-    let reply = reply_with_patch(path, patch_file).await.map_err(map_not_fount)?;
+    let reply = reply_with_patch(path, patch_file, range)
+        .await
+        .map_err(map_not_fount)?;
     Ok(reply)
 }
 
@@ -205,11 +241,14 @@ async fn handle_get(args: Arc<Args>, path: FullPath) -> Result<impl warp::Reply,
 #[tokio::main]
 async fn main(args: Args) {
     let cors = warp::cors()
-        .allow_any_origin();
+        .allow_any_origin()
+        .allow_method("GET")
+        .allow_header("range");
     let args = Arc::new(args);
     let routes = warp::get()
         .and(with_args(args))
         .and(warp::path::full())
+        .and(warp::header::headers_cloned())
         .and_then(handle_get)
         .with(cors);
     warp::serve(routes)
