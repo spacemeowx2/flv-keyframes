@@ -74,9 +74,9 @@ async fn generate_patch(file: File) -> Result<Option<Patch>> {
     let mut decoder = FileDecoder::new();
     let mut file = file.into_std().await;
     let mut keyframes = Keyframes::new();
-    let mut offset: usize = 13; // flv header
-    let mut metadata_offset: usize = 0;
-    let mut metadata_size: usize = 0;
+    let mut offset: u64 = 13; // flv header
+    let mut metadata_offset: u64 = 0;
+    let mut metadata_size: u64 = 0;
     let mut metadata: Option<amf0::Value> = None;
     task::spawn_blocking(move || {
         let mut buf = ReadBuf::new(vec![0; 4096]);
@@ -85,7 +85,7 @@ async fn generate_patch(file: File) -> Result<Option<Patch>> {
             decoder.decode_from_read_buf(&mut buf)?;
             if decoder.is_idle() {
                 let tag = decoder.finish_decoding()?;
-                let tag_size = tag.tag_size() as usize;
+                let tag_size = tag.tag_size() as u64;
                 match tag {
                     Tag::Audio(_) => {},
                     Tag::Video(VideoTag { timestamp, frame_type, .. }) => {
@@ -103,7 +103,7 @@ async fn generate_patch(file: File) -> Result<Option<Patch>> {
                             _ => return Err(anyhow::anyhow!("InvalidData")),
                         };
                         metadata_offset = offset;
-                        metadata_size = tag.tag_size() as usize;
+                        metadata_size = tag.tag_size() as u64;
                         let has_keyframes = has_keyframes(data.clone());
                         if has_keyframes {
                             return Ok(None)

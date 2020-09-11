@@ -10,7 +10,7 @@ impl Keyframes {
             times: vec![],
         }
     }
-    pub fn add(&mut self, offset: usize, time: f64) {
+    pub fn add(&mut self, offset: u64, time: f64) {
         self.filepositions.push(offset as f64);
         self.times.push(time);
     }
