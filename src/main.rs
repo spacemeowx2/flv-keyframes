@@ -23,8 +23,8 @@ struct Args {
     root_path: Option<PathBuf>,
 }
 
-fn map_not_fount<T: std::fmt::Debug>(e: T) ->warp::Rejection {
-    println!("map_not_fount {:?}", e);
+fn map_not_found<T: std::fmt::Debug>(e: T) ->warp::Rejection {
+    println!("map_not_found {:?}", e);
     warp::reject::not_found()
 }
 
@@ -218,7 +218,7 @@ async fn reply_with_patch(path: PathBuf, patch_file: Option<File>, range: Option
 async fn handle_get(args: Arc<Args>, path: FullPath, headers: HeaderMap) -> Result<impl warp::Reply, warp::Rejection>  {
     let range: Option<Range> = headers.typed_get();
     let root_path = args.root_path.clone().unwrap_or_default();
-    let p = decode(&path.as_str()[1..]).map_err(map_not_fount)?;
+    let p = decode(&path.as_str()[1..]).map_err(map_not_found)?;
     let path = root_path.join(PathBuf::from(p));
     let mut patch_path = path.clone();
     let filename = patch_path.file_name().unwrap_or_default().to_os_string();
@@ -228,12 +228,12 @@ async fn handle_get(args: Arc<Args>, path: FullPath, headers: HeaderMap) -> Resu
 
     let patch_file = match patch {
         Ok(pf) => Some(pf),
-        Err(_) => generate_keyframes(path.clone(), patch_path).await.map_err(map_not_fount)?,
+        Err(_) => generate_keyframes(path.clone(), patch_path).await.map_err(map_not_found)?,
     };
 
     let reply = reply_with_patch(path, patch_file, range)
         .await
-        .map_err(map_not_fount)?;
+        .map_err(map_not_found)?;
     Ok(reply)
 }
 
