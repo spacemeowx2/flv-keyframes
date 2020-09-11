@@ -21,7 +21,8 @@ struct Args {
     root_path: Option<PathBuf>,
 }
 
-fn map_not_fount<T>(_: T) ->warp::Rejection {
+fn map_not_fount<T: std::fmt::Debug>(e: T) ->warp::Rejection {
+    println!("map_not_fount {:?}", e);
     warp::reject::not_found()
 }
 
@@ -133,7 +134,7 @@ async fn generate_keyframes(path: PathBuf, patch_path: PathBuf) -> Result<Option
     let patch = generate_patch(file).await?;
     if let Some(patch) = patch {
         let patch = bincode::serialize(&patch)?;
-        let mut patch_file = File::open(patch_path).await?;
+        let mut patch_file = File::create(patch_path).await?;
         patch_file.write_all(&patch).await?;
         patch_file.seek(SeekFrom::Start(0)).await?;
         return Ok(Some(patch_file))
@@ -156,7 +157,7 @@ async fn reply_with_patch(path: PathBuf, patch_file: Option<File>) -> Result<war
     };
 
     let file = File::open(path).await?;
-    let stream = patch.patch_reader(file);
+    let stream = patch.patch_reader(file).await?;
     Ok(warp::http::Response::builder()
         .body(
             warp::hyper::Body::wrap_stream(stream)
@@ -167,14 +168,14 @@ async fn handle_get(args: Arc<Args>, path: FullPath) -> Result<impl warp::Reply,
     let root_path = args.root_path.clone().unwrap_or_default();
     let p = decode(&path.as_str()[1..]).map_err(map_not_fount)?;
     let path = root_path.join(PathBuf::from(p));
-    let patch_path = path.join(".v0.binpatch");
+    let mut patch_path = path.clone();
+    patch_path.set_extension("v0.binpatch");
     let patch = File::open(&patch_path).await;
 
     let patch_file = match patch {
         Ok(pf) => Some(pf),
         Err(_) => generate_keyframes(path.clone(), patch_path).await.map_err(map_not_fount)?,
     };
-
 
     let reply = reply_with_patch(path, patch_file).await.map_err(map_not_fount)?;
     Ok(reply)
