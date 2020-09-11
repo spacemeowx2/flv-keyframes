@@ -10,7 +10,7 @@ use flv_codec::{FileDecoder, Tag, ScriptDataTag, VideoTag, FrameType, TagEncoder
 use bytecodec::{Encode, Decode, io::{ReadBuf, IoDecodeExt, IoEncodeExt}};
 use amf::amf0;
 use keyframes::Keyframes;
-use patch::Patch;
+use patch::{reader_stream, Patch};
 use std::io::{SeekFrom, Cursor};
 use anyhow::Result;
 
@@ -157,8 +157,11 @@ async fn reply_with_patch(path: PathBuf, patch_file: Option<File>) -> Result<war
     };
 
     let file = File::open(path).await?;
-    let stream = patch.patch_reader(file).await?;
+    let reader = patch.patch_reader(file).await?;
+    let content_length = reader.len();
+    let stream = reader_stream(reader);
     Ok(warp::http::Response::builder()
+        .header("Content-Length", content_length)
         .body(
             warp::hyper::Body::wrap_stream(stream)
         )?)

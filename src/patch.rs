@@ -141,11 +141,10 @@ where
 }
 
 impl Patch {
-    pub async fn patch_reader<R>(&self, reader: R) -> io::Result<impl Stream<Item=Result<Bytes, std::io::Error>>>
+    pub async fn patch_reader<R>(&self, reader: R) -> io::Result<PatchedReader<R>>
     where
         R: AsyncRead + AsyncSeek + Send + 'static + Unpin,
     {
-        let patch_reader = PatchedReader::new(reader, self.clone()).await?;
-        Ok(reader_stream(patch_reader))
+        Ok(PatchedReader::new(reader, self.clone()).await?)
     }
 }
