@@ -1,7 +1,14 @@
-use serde::{Serialize, Deserialize};
-use futures::{stream::{self, Stream}, ready};
-use bytes::{Bytes, Buf, BytesMut};
-use std::{pin::Pin, task::{Context, Poll}, io::{self, SeekFrom}};
+use bytes::{Buf, Bytes, BytesMut};
+use futures::{
+    ready,
+    stream::{self, Stream},
+};
+use serde::{Deserialize, Serialize};
+use std::{
+    io::{self, SeekFrom},
+    pin::Pin,
+    task::{Context, Poll},
+};
 use tokio::io::{AsyncRead, AsyncSeek};
 use tokio::prelude::*;
 
@@ -12,8 +19,7 @@ pub struct Patch {
     pub patched: Vec<u8>,
 }
 
-pub struct PatchedReader<R>
-{
+pub struct PatchedReader<R> {
     reader: R,
     reader_pos: u64,
     patch: Patch,
@@ -37,9 +43,7 @@ where
             SeekFrom::Current(i) => {
                 self.offset = (self.offset as i64 + i) as u64;
             }
-            SeekFrom::End(i) => {
-                self.offset = (self.len() as i64 + i) as u64
-            },
+            SeekFrom::End(i) => self.offset = (self.len() as i64 + i) as u64,
         }
         Poll::Ready(Ok(()))
     }
@@ -122,7 +126,7 @@ where
     }
 }
 
-pub fn reader_stream<R>(mut reader: R) -> impl Stream<Item=Result<Bytes, std::io::Error>>
+pub fn reader_stream<R>(mut reader: R) -> impl Stream<Item = Result<Bytes, std::io::Error>>
 where
     R: AsyncRead + Send + 'static + Unpin,
 {
@@ -134,7 +138,7 @@ where
             Err(e) => return Poll::Ready(Some(Err(e))),
         };
         if n == 0 {
-            return Poll::Ready(None)
+            return Poll::Ready(None);
         }
         Poll::Ready(Some(Ok(buf.to_bytes())))
     })

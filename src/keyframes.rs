@@ -17,7 +17,10 @@ impl Keyframes {
         self.times.push(time);
     }
     pub fn into_amf0(self) -> (String, amf::amf0::Value) {
-        use amf::{amf0::{self, Value}, Pair};
+        use amf::{
+            amf0::{self, Value},
+            Pair,
+        };
         let offset = self.offset;
         let keyframes = Value::Object {
             class_name: None,
@@ -29,23 +32,15 @@ impl Keyframes {
                             .into_iter()
                             .map(|i| i + offset)
                             .map(amf0::number)
-                            .collect()
-                    )
+                            .collect(),
+                    ),
                 },
                 Pair {
                     key: "times".to_string(),
-                    value: amf0::array(
-                        self.times
-                            .into_iter()
-                            .map(amf0::number)
-                            .collect()
-                    )
-                }
+                    value: amf0::array(self.times.into_iter().map(amf0::number).collect()),
+                },
             ],
         };
-        (
-            "keyframes".to_string(),
-            keyframes,
-        )
+        ("keyframes".to_string(), keyframes)
     }
 }
