@@ -1,3 +1,5 @@
+use crate::keyframes::Keyframes;
+use crate::patch::Patch;
 use amf::amf0;
 use anyhow::Result;
 use bytecodec::{
@@ -8,10 +10,12 @@ use bytes::{Buf, BufMut};
 use flv_codec::{
     FileDecoder, FrameType, ScriptDataTag, StreamId, Tag, TagEncoder, Timestamp, VideoTag,
 };
-use crate::keyframes::Keyframes;
-use crate::patch::Patch;
 use std::io::{Cursor, SeekFrom};
-use tokio::{fs::File, task, prelude::*};
+use tokio::{
+    fs::File,
+    io::{AsyncReadExt, AsyncSeekExt},
+    task,
+};
 
 fn has_keyframes(v: amf0::Value) -> bool {
     match v.try_into_pairs() {
@@ -104,9 +108,7 @@ fn read_frame_type(frame_type: u32) -> Result<VideoFrameType> {
 }
 enum FlvTagData {
     Audio,
-    Video {
-        frame_type: VideoFrameType,
-    },
+    Video { frame_type: VideoFrameType },
     Script,
 }
 async fn read_flv_tag(file: &mut File) -> Result<FlvTag> {
@@ -128,23 +130,23 @@ async fn read_flv_tag(file: &mut File) -> Result<FlvTag> {
         stream_id,
         data: match tag_type {
             0x8 => {
-                file.seek(SeekFrom::Current(data_size as i64)).await;
+                file.seek(SeekFrom::Current(data_size as i64)).await?;
                 FlvTagData::Audio
-            },
+            }
             0x9 => {
                 let mut buf = [0u8; 4];
-                file.read_exact(&mut buf);
+                file.read_exact(&mut buf).await?;
                 let frame_type = (&buf[..]).get_u32();
-                file.seek(SeekFrom::Current(data_size as i64 - 4)).await;
+                file.seek(SeekFrom::Current(data_size as i64 - 4)).await?;
                 FlvTagData::Video {
                     frame_type: read_frame_type(frame_type)?,
                 }
-            },
+            }
             0x12 => {
-                file.seek(SeekFrom::Current(data_size as i64)).await;
-                
-                FlvTagData::Script
-            },
+                file.seek(SeekFrom::Current(data_size as i64)).await?;
+
+                FlvTagData::Script {}
+            }
             _ => {
                 format_err()?;
                 unreachable!();
@@ -163,7 +165,9 @@ pub async fn generate_patch(mut file: File) -> Result<Option<Patch>> {
     read_flv_header(&mut file).await?;
 
     loop {
-        let FlvTag { timestamp, data, .. } = read_flv_tag(&mut file).await?;
+        let FlvTag {
+            timestamp, data, ..
+        } = read_flv_tag(&mut file).await?;
         match data {
             FlvTagData::Audio => {}
             FlvTagData::Video { frame_type } => {
@@ -171,25 +175,26 @@ pub async fn generate_patch(mut file: File) -> Result<Option<Patch>> {
                     keyframes.add(offset, (timestamp as f64) / 1000f64);
                 }
             }
-            // FlvTagData::ScriptData(tag @ ScriptDataTag { .. }) => {
-            //     let data = &mut &tag.data[..];
-            //     let mut amf_decoder = amf0::Decoder::new(data);
-            //     let data = match amf_decoder.decode()? {
-            //         amf0::Value::String(name) if name == "onMetaData" => {
-            //             amf_decoder.decode()?
-            //         }
-            //         _ => return Err(anyhow::anyhow!("InvalidData")),
-            //     };
-            //     metadata_offset = offset;
-            //     metadata_size = tag.tag_size() as u64 + 4;
-            //     let has_keyframes = has_keyframes(data.clone());
-            //     if has_keyframes {
-            //         return Ok(None);
-            //     }
-            //     metadata = Some(data);
-            // }
+            FlvTagData::Script => {}
         };
     }
+    // FlvTagData::ScriptData(tag @ ScriptDataTag { .. }) => {
+    //     let data = &mut &tag.data[..];
+    //     let mut amf_decoder = amf0::Decoder::new(data);
+    //     let data = match amf_decoder.decode()? {
+    //         amf0::Value::String(name) if name == "onMetaData" => {
+    //             amf_decoder.decode()?
+    //         }
+    //         _ => return Err(anyhow::anyhow!("InvalidData")),
+    //     };
+    //     metadata_offset = offset;
+    //     metadata_size = tag.tag_size() as u64 + 4;
+    //     let has_keyframes = has_keyframes(data.clone());
+    //     if has_keyframes {
+    //         return Ok(None);
+    //     }
+    //     metadata = Some(data);
+    // }
     todo!();
     // task::spawn_blocking(move || {
     //     let mut buf = ReadBuf::new(vec![0; 4096]);

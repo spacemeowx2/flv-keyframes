@@ -1,16 +1,15 @@
-use bytes::{Buf, Bytes, BytesMut};
+use bytes::{Bytes, BytesMut};
 use futures::{
     ready,
     stream::{self, Stream},
 };
-use serde::{Deserialize, Serialize};
+use serde_derive::{Deserialize, Serialize};
 use std::{
     io::{self, SeekFrom},
     pin::Pin,
     task::{Context, Poll},
 };
-use tokio::io::{AsyncRead, AsyncSeek};
-use tokio::prelude::*;
+use tokio::io::{AsyncRead, AsyncSeek, AsyncSeekExt, ReadBuf};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Patch {
@@ -31,11 +30,7 @@ impl<R> AsyncSeek for PatchedReader<R>
 where
     R: AsyncSeek + Send + 'static + Unpin,
 {
-    fn start_seek(
-        mut self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-        position: SeekFrom,
-    ) -> Poll<io::Result<()>> {
+    fn start_seek(mut self: Pin<&mut Self>, position: SeekFrom) -> io::Result<()> {
         match position {
             SeekFrom::Start(i) => {
                 self.offset = i;
@@ -45,7 +40,7 @@ where
             }
             SeekFrom::End(i) => self.offset = (self.len() as i64 + i) as u64,
         }
-        Poll::Ready(Ok(()))
+        Ok(())
     }
 
     fn poll_complete(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<u64>> {
@@ -60,8 +55,8 @@ where
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        buf: &mut [u8],
-    ) -> Poll<io::Result<usize>> {
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
         let off = self.offset;
         let patch = &self.patch;
         let (read_from, readable) = if off < patch.origin_pos {
@@ -76,24 +71,23 @@ where
             let off = off - patch.origin_pos;
             (StartPoint::Patch(off as usize), self.patched_len() - off)
         };
-        let read_size = buf.len().min(readable as usize);
-        let result = match read_from {
+        let read_size = buf.remaining().min(readable as usize);
+        match read_from {
             StartPoint::Origin(off) => {
                 if self.reader_pos != off {
-                    ready!(Pin::new(&mut self.reader).start_seek(cx, SeekFrom::Start(off)))?;
+                    Pin::new(&mut self.reader).start_seek(SeekFrom::Start(off))?;
                     self.reader_pos = ready!(Pin::new(&mut self.reader).poll_complete(cx))?;
                 }
-                let read = ready!(Pin::new(&mut self.reader).poll_read(cx, &mut buf[..read_size]))?;
-                self.reader_pos += read as u64;
-                read
+                let mut read_buf = buf.take(read_size);
+                ready!(Pin::new(&mut self.reader).poll_read(cx, &mut read_buf))?;
+                self.reader_pos += read_buf.filled().len() as u64;
             }
             StartPoint::Patch(off) => {
-                &mut buf[..read_size].copy_from_slice(&patch.patched[off..off + read_size]);
-                read_size
+                buf.put_slice(&patch.patched[off..off + read_size]);
             }
         };
-        self.offset += result as u64;
-        Poll::Ready(Ok(result))
+        self.offset += buf.filled().len() as u64;
+        Poll::Ready(Ok(()))
     }
 }
 
@@ -133,14 +127,15 @@ where
     stream::poll_fn(move |cx| {
         let mut buf = BytesMut::new();
         buf.reserve(2048);
-        let n = match ready!(Pin::new(&mut reader).poll_read_buf(cx, &mut buf)) {
-            Ok(n) => n,
+        let mut read_buf = ReadBuf::new(&mut buf);
+        match ready!(Pin::new(&mut reader).poll_read(cx, &mut read_buf)) {
+            Ok(n) => {}
             Err(e) => return Poll::Ready(Some(Err(e))),
         };
-        if n == 0 {
+        if read_buf.filled().is_empty() {
             return Poll::Ready(None);
         }
-        Poll::Ready(Some(Ok(buf.to_bytes())))
+        Poll::Ready(Some(Ok(buf.freeze())))
     })
 }
 

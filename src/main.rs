@@ -6,9 +6,16 @@ use anyhow::Result;
 use flv::generate_patch;
 use headers::{HeaderMap, HeaderMapExt, Range};
 use patch::{reader_stream, Patch};
-use std::{io::SeekFrom, path::PathBuf, sync::Arc};
+use std::{
+    io::{self, SeekFrom},
+    path::PathBuf,
+    sync::Arc,
+};
 use structopt::StructOpt;
-use tokio::{fs::File, prelude::*};
+use tokio::{
+    fs::File,
+    io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
+};
 use urlencoding::decode;
 use warp::{path::FullPath, Filter};
 
