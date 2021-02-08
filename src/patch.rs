@@ -1,15 +1,13 @@
+use async_stream::try_stream;
 use bytes::{Bytes, BytesMut};
-use futures::{
-    ready,
-    stream::{self, Stream},
-};
+use futures::{ready, stream::Stream};
 use serde_derive::{Deserialize, Serialize};
 use std::{
     io::{self, SeekFrom},
     pin::Pin,
     task::{Context, Poll},
 };
-use tokio::io::{AsyncRead, AsyncSeek, AsyncSeekExt, ReadBuf};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt, ReadBuf};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Patch {
@@ -124,19 +122,17 @@ pub fn reader_stream<R>(mut reader: R) -> impl Stream<Item = Result<Bytes, std::
 where
     R: AsyncRead + Send + 'static + Unpin,
 {
-    stream::poll_fn(move |cx| {
-        let mut buf = BytesMut::new();
-        buf.reserve(2048);
-        let mut read_buf = ReadBuf::new(&mut buf);
-        match ready!(Pin::new(&mut reader).poll_read(cx, &mut read_buf)) {
-            Ok(n) => {}
-            Err(e) => return Poll::Ready(Some(Err(e))),
-        };
-        if read_buf.filled().is_empty() {
-            return Poll::Ready(None);
+    try_stream! {
+        loop {
+            let mut buf = BytesMut::new();
+            buf.reserve(2048);
+            let size = reader.read_buf(&mut buf).await?;
+            if size == 0 {
+                return
+            }
+            yield buf.freeze()
         }
-        Poll::Ready(Some(Ok(buf.freeze())))
-    })
+    }
 }
 
 impl Patch {

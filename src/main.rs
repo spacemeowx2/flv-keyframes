@@ -1,8 +1,10 @@
 mod flv;
+mod flv_reader;
 mod keyframes;
 mod patch;
 
 use anyhow::Result;
+use env_logger::Env;
 use flv::generate_patch;
 use headers::{HeaderMap, HeaderMapExt, Range};
 use patch::{reader_stream, Patch};
@@ -27,7 +29,7 @@ struct Args {
 }
 
 fn map_not_found<T: std::fmt::Debug>(e: T) -> warp::Rejection {
-    println!("map_not_found {:?}", e);
+    log::error!("map_not_found {:?}", e);
     warp::reject::not_found()
 }
 
@@ -125,6 +127,7 @@ async fn handle_get(
     patch_path.set_extension("v0.binpatch");
     let patch = File::open(&patch_path).await;
 
+    log::trace!("handle get {:?} patch name {:?}", path, patch_path);
     let patch_file = match patch {
         Ok(pf) => Some(pf),
         Err(_) => generate_keyframes(path.clone(), patch_path)
@@ -141,6 +144,8 @@ async fn handle_get(
 #[paw::main]
 #[tokio::main]
 async fn main(args: Args) {
+    env_logger::Builder::from_env(Env::default().default_filter_or("flv_keyframes=trace")).init();
+
     let cors = warp::cors()
         .allow_any_origin()
         .allow_method("GET")
