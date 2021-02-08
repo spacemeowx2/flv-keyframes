@@ -22,6 +22,7 @@ pub struct PatchedReader<R> {
     patch: Patch,
     offset: u64,
     origin_length: u64,
+    seeking: bool,
 }
 
 impl<R> AsyncSeek for PatchedReader<R>
@@ -55,37 +56,36 @@ where
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        let off = self.offset;
-        let patch = &self.patch;
-        let (read_from, readable) = if off < patch.origin_pos {
-            // before patch
-            (StartPoint::Origin(off), patch.origin_pos - off)
-        } else if off >= (patch.origin_pos + self.patched_len()) {
-            // after patch
-            let off = off - self.patched_len() + patch.origin_size;
-            (StartPoint::Origin(off), self.len() - off)
-        } else {
-            // in patch
-            let off = off - patch.origin_pos;
-            (StartPoint::Patch(off as usize), self.patched_len() - off)
-        };
-        let read_size = buf.remaining().min(readable as usize);
-        match read_from {
-            StartPoint::Origin(off) => {
-                if self.reader_pos != off {
-                    Pin::new(&mut self.reader).start_seek(SeekFrom::Start(off))?;
-                    self.reader_pos = ready!(Pin::new(&mut self.reader).poll_complete(cx))?;
+        loop {
+            if self.seeking {
+                self.reader_pos = ready!(Pin::new(&mut self.reader).poll_complete(cx))?;
+                self.seeking = false;
+            }
+            let patch = &self.patch;
+            let (read_from, readable) = self.get_point();
+            let read_size = buf.remaining().min(readable as usize);
+            let read = match read_from {
+                StartPoint::Origin(off) => {
+                    if self.reader_pos != off {
+                        Pin::new(&mut self.reader).start_seek(SeekFrom::Start(off))?;
+                        self.seeking = true;
+                        continue;
+                    }
+                    let mut read_buf = ReadBuf::new(buf.initialize_unfilled_to(read_size));
+                    ready!(Pin::new(&mut self.reader).poll_read(cx, &mut read_buf))?;
+                    let read = read_buf.filled().len();
+                    buf.advance(read);
+                    self.reader_pos += read as u64;
+                    read
                 }
-                let mut read_buf = buf.take(read_size);
-                ready!(Pin::new(&mut self.reader).poll_read(cx, &mut read_buf))?;
-                self.reader_pos += read_buf.filled().len() as u64;
-            }
-            StartPoint::Patch(off) => {
-                buf.put_slice(&patch.patched[off..off + read_size]);
-            }
-        };
-        self.offset += buf.filled().len() as u64;
-        Poll::Ready(Ok(()))
+                StartPoint::Patch(off) => {
+                    buf.put_slice(&patch.patched[off..off + read_size]);
+                    read_size
+                }
+            };
+            self.offset += read as u64;
+            return Poll::Ready(Ok(()));
+        }
     }
 }
 
@@ -108,6 +108,7 @@ where
             patch,
             offset: 0,
             origin_length,
+            seeking: false,
         })
     }
     pub fn len(&self) -> u64 {
@@ -115,6 +116,22 @@ where
     }
     pub fn patched_len(&self) -> u64 {
         self.patch.patched.len() as u64
+    }
+    fn get_point(&self) -> (StartPoint, u64) {
+        let off = self.offset;
+        let patch = &self.patch;
+        if off < patch.origin_pos {
+            // before patch
+            (StartPoint::Origin(off), patch.origin_pos - off)
+        } else if off >= (patch.origin_pos + self.patched_len()) {
+            // after patch
+            let off = off - self.patched_len() + patch.origin_size;
+            (StartPoint::Origin(off), self.len() - off)
+        } else {
+            // in patch
+            let off = off - patch.origin_pos;
+            (StartPoint::Patch(off as usize), self.patched_len() - off)
+        }
     }
 }
 
