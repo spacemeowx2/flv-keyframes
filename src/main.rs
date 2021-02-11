@@ -158,18 +158,22 @@ async fn handle_hook(
         .join(PathBuf::from(&args.relative_path))
         .join(PathBuf::from(relative_path));
 
-    let mut patch_path = path.clone();
-    let filename = patch_path.file_name().unwrap_or_default().to_os_string();
-    patch_path.set_file_name(format!(".{}", filename.to_string_lossy()));
-    patch_path.set_extension("v0.binpatch");
-    let patch = File::open(&patch_path).await;
+    let task = async move {
+        let mut patch_path = path.clone();
+        let filename = patch_path.file_name().unwrap_or_default().to_os_string();
+        patch_path.set_file_name(format!(".{}", filename.to_string_lossy()));
+        patch_path.set_extension("v0.binpatch");
+        let patch = File::open(&patch_path).await;
 
-    let _patch_file = match patch {
-        Ok(pf) => Some(pf),
-        Err(_) => generate_keyframes(path.clone(), patch_path)
-            .await
-            .map_err(map_not_found)?,
+        match patch {
+            Ok(_) => {}
+            Err(_) => match generate_keyframes(path.clone(), patch_path).await {
+                Ok(_) => println!("generate_keyframes succeed"),
+                Err(e) => println!("Failed to generate keyframes {:?}", e),
+            },
+        };
     };
+    tokio::spawn(task);
     Ok(warp::reply::json(&0))
 }
 
