@@ -6,6 +6,7 @@ use anyhow::Result;
 use flv::generate_patch;
 use headers::{HeaderMap, HeaderMapExt, Range};
 use patch::{reader_stream, Patch};
+use serde::Deserialize;
 use std::{io::SeekFrom, path::PathBuf, sync::Arc};
 use structopt::StructOpt;
 use tokio::{fs::File, prelude::*};
@@ -17,6 +18,8 @@ struct Args {
     /// root path to serve, default to "./"
     #[structopt(short, long, parse(from_os_str))]
     root_path: Option<PathBuf>,
+    #[structopt(long, default_value = "")]
+    relative_path: String,
 }
 
 fn map_not_found<T: std::fmt::Debug>(e: T) -> warp::Rejection {
@@ -131,6 +134,45 @@ async fn handle_get(
     Ok(reply)
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct HookArgs {
+    event_random_id: String,
+    room_id: u64,
+    name: String,
+    title: String,
+    relative_path: String,
+    file_size: u64,
+    start_record_time: String,
+    end_record_time: String,
+}
+
+async fn handle_hook(
+    args: Arc<Args>,
+    hook_args: HookArgs,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    println!("Get hook {:#?}", hook_args);
+    let HookArgs { relative_path, .. } = hook_args;
+    let root_path = args.root_path.clone().unwrap_or_default();
+    let path = root_path
+        .join(PathBuf::from(&args.relative_path))
+        .join(PathBuf::from(relative_path));
+
+    let mut patch_path = path.clone();
+    let filename = patch_path.file_name().unwrap_or_default().to_os_string();
+    patch_path.set_file_name(format!(".{}", filename.to_string_lossy()));
+    patch_path.set_extension("v0.binpatch");
+    let patch = File::open(&patch_path).await;
+
+    let _patch_file = match patch {
+        Ok(pf) => Some(pf),
+        Err(_) => generate_keyframes(path.clone(), patch_path)
+            .await
+            .map_err(map_not_found)?,
+    };
+    Ok(warp::reply::json(&0))
+}
+
 #[paw::main]
 #[tokio::main]
 async fn main(args: Args) {
@@ -139,11 +181,17 @@ async fn main(args: Args) {
         .allow_method("GET")
         .allow_header("range");
     let args = Arc::new(args);
-    let routes = warp::get()
-        .and(with_args(args))
+    let get = warp::get()
+        .and(with_args(args.clone()))
         .and(warp::path::full())
         .and(warp::header::headers_cloned())
-        .and_then(handle_get)
+        .and_then(handle_get);
+    let routes = warp::post()
+        .and(warp::path("space_webhook"))
+        .and(with_args(args))
+        .and(warp::body::json())
+        .and_then(handle_hook)
+        .or(get)
         .with(cors);
     warp::serve(routes).run(([0, 0, 0, 0], 3040)).await;
 }
